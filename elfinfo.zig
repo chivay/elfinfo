@@ -1,4 +1,4 @@
-const print = @import("std").debug.print;
+//const print = @import("std").debug.print;
 const std = @import("std");
 const File = std.fs.File;
 const os = std.os;
@@ -9,17 +9,73 @@ const elf = @import("defs.zig");
 const Elf64Header = elf.Elf64Header;
 const Elf64Phdr = elf.Elf64Phdr;
 const Elf64Shdr = elf.Elf64Shdr;
+const io = std.io;
 
+fn print(comptime fmt: []const u8, args: var) void {
+    std.io.getStdOut().writer().print(fmt, args) catch return;
+}
+
+fn hex_print_chunks(buffer: []const u8, chunk_size: u32) void {
+    var left = buffer;
+    while (left.len > 0) {
+        const len = if (left.len < chunk_size) left.len else chunk_size;
+        print("{x}", .{left[0..len]});
+
+        left = left[len..];
+
+        if (left.len > 0) {
+            print(" ", .{});
+        }
+    }
+}
+
+fn ascii_print(buffer: []const u8) void {
+    for (buffer) |c| {
+        if (c > 0x20 and c < 0x7f) {
+            print("{c}", .{c});
+        } else {
+            print(".", .{});
+        }
+    }
+}
+
+fn hexdump(buffer: []const u8, base: usize) void {
+    const WIDTH = 16;
+    const GROUP = 2;
+
+    var left = buffer;
+    var total: usize = base;
+    while (left.len > 0) {
+        const len = if (left.len < WIDTH) left.len else WIDTH;
+        const chunk = left[0..len];
+        print("{x:0>8}: ", .{total});
+        hex_print_chunks(chunk, GROUP);
+
+        const should_be = WIDTH * 2 + ((WIDTH - 1) / GROUP);
+        const actually = len * 2 + ((len - 1) / GROUP);
+        var err = should_be - actually;
+        while (err > 0) : (err -= 1) {
+            print(" ", .{});
+        }
+
+        print(" ", .{});
+        ascii_print(chunk);
+        print("\n", .{});
+
+        left = left[len..];
+        total += len;
+    }
+}
 
 pub fn ehdr_print(self: Elf64Header) void {
     print("========== ELF header\n", .{});
     print("  magic: {x}\n", .{self.ident});
     print("   type: {}\n", .{self.file_type});
     print("machine: {}\n", .{self.machine});
+    print("  entry: {x}\n", .{self.entry});
     print("  phoff: {} bytes into file\n", .{self.phoff});
     print("  shoff: {} bytes into file\n", .{self.shoff});
 }
-
 
 pub fn phdr_print(self: Elf64Phdr) void {
     print("{:15}", .{self.htype.name()});
@@ -38,11 +94,18 @@ pub fn phdr_print(self: Elf64Phdr) void {
     print("{x:>10}\n", .{self.filesz});
 }
 
-pub fn shdr_print(self: Elf64Shdr, strings: []u8) void {
-    const slice = strings[self.name..];
-    const namelen = std.mem.indexOf(u8, slice, "\x00") orelse 0;
+pub fn shdr_print(self: Elf64Shdr, strings: ?[]const u8) void {
+    var section_name: ?[]const u8 = null;
+    if (strings != null) {
+        const slice = strings.?[self.name..];
+        const len = std.mem.indexOf(u8, slice, "\x00") orelse 0;
+        section_name = slice[0..len];
+    } else {
+        section_name = "";
+    }
+
     print("{:12}", .{self.stype.name()});
-    print("{:20}", .{strings[self.name .. self.name + namelen]});
+    print("{:20}", .{section_name});
     print("{x:>10} ", .{self.flags});
     print("{x:>10} ", .{self.addr});
     print("{x:>10} ", .{self.offset});
@@ -55,7 +118,22 @@ pub fn parse_elf(file: File) !void {
     ehdr_print(header);
 
     try parse_program_headers(file, &header);
-    try parse_program_sections(file, &header);
+    const strings = try build_str_table(file, &header);
+    const section_headers = try parse_program_sections(file, &header);
+    print("========== SHDRs\n", .{});
+    print("Type        Name                     Flags       Addr     Offset       Size\n", .{});
+    for (section_headers) |shdr| {
+        shdr_print(shdr, strings);
+    }
+
+    var i: u32 = 0;
+    for (section_headers) |shdr| {
+        shdr_print(shdr, strings);
+        const data = try get_section(file, &header, i);
+        print("Data in section: \n", .{});
+        hexdump(data, shdr.addr);
+        i += 1;
+    }
 }
 
 pub fn parse_program_headers(file: File, header: *Elf64Header) !void {
@@ -70,33 +148,40 @@ pub fn parse_program_headers(file: File, header: *Elf64Header) !void {
     }
 }
 
+/// Get contents of STRTAB array
 pub fn build_str_table(file: File, header: *Elf64Header) ![]u8 {
-    var section_idx = header.shstrndx;
-    try file.seekTo(header.shoff + @sizeOf(Elf64Shdr) * section_idx);
-    var shdr: Elf64Shdr = undefined;
-    var buf: []u8 = std.mem.asBytes(&shdr);
-    var nread = try file.read(buf);
+    return get_section(file, header, header.shstrndx);
+}
 
-    const offset = shdr.offset;
-    const size = shdr.size;
-    try file.seekTo(shdr.offset);
-    const buffer = try alloc.alloc(u8, size);
-    nread = try file.read(buffer);
+const ELFError = error{ShortRead};
+
+pub fn get_section(file: File, header: *Elf64Header, idx: u32) ![]u8 {
+    var shdr: Elf64Shdr = undefined;
+    const buf = std.mem.asBytes(&shdr);
+
+    const nread = try file.preadAll(buf, header.shoff + @sizeOf(Elf64Shdr) * idx);
+    if (nread != @sizeOf(Elf64Shdr)) {
+        return error.ShortRead;
+    }
+
+    const buffer = try alloc.alloc(u8, shdr.size);
+    const bytes_read = try file.preadAll(buffer, shdr.offset);
+    if (bytes_read != shdr.size) {
+        return error.ShortRead;
+    }
+
     return buffer;
 }
 
-pub fn parse_program_sections(file: File, header: *Elf64Header) !void {
-    var strings = try build_str_table(file, header);
+pub fn parse_program_sections(file: File, header: *Elf64Header) ![]Elf64Shdr {
+    var sections = try alloc.alloc(Elf64Shdr, header.shnum);
     try file.seekTo(header.shoff);
     var i: u32 = 0;
-    print("========== SHDRs\n", .{});
-    print("Type        Name                     Flags       Addr     Offset       Size\n", .{});
     while (i < header.shnum) : (i += 1) {
-        var shdr: Elf64Shdr = undefined;
-        var buf: []u8 = std.mem.asBytes(&shdr);
+        var buf: []u8 = std.mem.asBytes(&sections[i]);
         var nread = try file.readAll(buf);
-        shdr_print(shdr, strings);
     }
+    return sections;
 }
 
 var alloc: *std.mem.Allocator = undefined;

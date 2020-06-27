@@ -214,7 +214,6 @@ pub const Elf64Header = packed struct {
         EM_CSKY = 252,
         EM_NUM = 253,
     };
-
 };
 
 pub const Elf64Phdr = packed struct {
@@ -284,7 +283,6 @@ pub const Elf64Phdr = packed struct {
             return result;
         }
     };
-
 };
 
 pub const Elf64Shdr = packed struct {
@@ -358,5 +356,4 @@ pub const Elf64Shdr = packed struct {
             };
         }
     };
-
 };
