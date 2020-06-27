@@ -215,13 +215,6 @@ pub const Elf64Header = packed struct {
         EM_NUM = 253,
     };
 
-    pub fn debug_print(self: @This()) void {
-        print("magic: {x}\n", .{self.ident});
-        print("type: {}\n", .{self.file_type});
-        print("machine: {}\n", .{self.machine});
-        print("phoff: {} bytes into file\n", .{self.phoff});
-        print("shoff: {} bytes into file\n", .{self.shoff});
-    }
 };
 
 pub const Elf64Phdr = packed struct {
@@ -265,7 +258,7 @@ pub const Elf64Phdr = packed struct {
         PT_LOPROC = 0x70000000,
         PT_HIPROC = 0x7fffffff,
 
-        pub fn name(self: SegmentType) []const u8 {
+        pub fn name(self: comptime SegmentType) []const u8 {
             const result = switch (self) {
                 .PT_NULL => "NULL",
                 .PT_LOAD => "LOAD",
@@ -292,22 +285,6 @@ pub const Elf64Phdr = packed struct {
         }
     };
 
-    pub fn debug_print(self: @This()) void {
-        print("{:15}", .{self.htype.name()});
-
-        var flagstring: [3]u8 = undefined;
-        const disabled = '-';
-        flagstring[0] = if (self.flags.r != 0) 'R' else disabled;
-        flagstring[1] = if (self.flags.w != 0) 'W' else disabled;
-        flagstring[2] = if (self.flags.x != 0) 'X' else disabled;
-
-        print("{}", .{flagstring});
-        print("{x:>10}", .{self.offset});
-        print("{x:>10}", .{self.vaddr});
-        print("{x:>10}", .{self.paddr});
-        print("{x:>10}", .{self.memsz});
-        print("{x:>10}\n", .{self.filesz});
-    }
 };
 
 pub const Elf64Shdr = packed struct {
@@ -350,7 +327,7 @@ pub const Elf64Shdr = packed struct {
         SHT_GNU_verneed = 0x6ffffffe,
         SHT_GNU_versym = 0x6fffffff,
 
-        pub fn name(self: SectionType) []const u8 {
+        pub fn name(self: comptime SectionType) []const u8 {
             return switch (self) {
                 .SHT_NULL => "NULL",
                 .SHT_PROGBITS => "PROGBITS",
@@ -382,14 +359,4 @@ pub const Elf64Shdr = packed struct {
         }
     };
 
-    pub fn debug_print(self: @This(), strings: []u8) void {
-        const slice = strings[self.name..];
-        const namelen = std.mem.indexOf(u8, slice, "\x00") orelse 0;
-        print("{:12}", .{self.stype.name()});
-        print("{:20}", .{strings[self.name .. self.name + namelen]});
-        print("{x:0^8}\t", .{self.flags});
-        print("0x{x}\t", .{self.addr});
-        print("0x{x}\t", .{self.offset});
-        print("0x{x}\n", .{self.size});
-    }
 };
