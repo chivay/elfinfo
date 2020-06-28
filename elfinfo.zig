@@ -12,7 +12,7 @@ const Elf64Shdr = elf.Elf64Shdr;
 const io = std.io;
 
 fn print(comptime fmt: []const u8, args: var) void {
-    std.io.getStdOut().writer().print(fmt, args) catch return;
+    buffered_out.writer().print(fmt, args) catch return;
 }
 
 fn hex_print_chunks(buffer: []const u8, chunk_size: u32) void {
@@ -120,7 +120,7 @@ pub fn parse_elf(file: File) !void {
     try parse_program_headers(file, &header);
     const strings = try build_str_table(file, &header);
     const section_headers = try parse_program_sections(file, &header);
-    print("========== SHDRs\n", .{});
+    print("========== Section headers\n", .{});
     print("Type        Name                     Flags       Addr     Offset       Size\n", .{});
     for (section_headers) |shdr| {
         shdr_print(shdr, strings);
@@ -132,6 +132,7 @@ pub fn parse_elf(file: File) !void {
         const data = try get_section(file, &header, i);
         print("Data in section: \n", .{});
         hexdump(data, shdr.addr);
+        print("\n", .{});
         i += 1;
     }
 }
@@ -139,7 +140,7 @@ pub fn parse_elf(file: File) !void {
 pub fn parse_program_headers(file: File, header: *Elf64Header) !void {
     try file.seekTo(header.phoff);
     var i: u32 = 0;
-    print("========== PHDRs\n", .{});
+    print("========== Program headers\n", .{});
     print("Type           Flags  Offset     Vaddr     Paddr  Mem size File size\n", .{});
     while (i < header.phnum) : (i += 1) {
         var phdr: Elf64Phdr = undefined;
@@ -185,12 +186,15 @@ pub fn parse_program_sections(file: File, header: *Elf64Header) ![]Elf64Shdr {
 }
 
 var alloc: *std.mem.Allocator = undefined;
+var buffered_out = std.io.bufferedWriter(std.io.getStdOut().writer());
 
 pub fn main() !void {
     // Initialize allocator
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     alloc = &arena.allocator;
     defer arena.deinit();
+
+    defer buffered_out.flush() catch {};
 
     var argit = process.args();
     _ = argit.skip();
